@@ -32,9 +32,10 @@ type messageRegistry struct {
 // ..and unregisterMessage calls t.close when graceful and zero messages.
 // -> might just be a matter of getting back to the waitGroup idea, which wasn't bad.
 func (r *messageRegistry) incrementNextID() {
-	r.nextID++
-	if r.nextID > r.lastMsgID {
+	if r.nextID == r.lastMsgID {
 		r.nextID = r.firstMsgID
+	} else {
+		r.nextID++
 	}
 }
 func (r *messageRegistry) checkMsgIDRange(msgID int) (uint8, error) {
