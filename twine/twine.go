@@ -265,15 +265,12 @@ func (t *Twine) receive() {
 		} else if raw.service == replyService {
 			msgData, err := t.msgReg.closeMessage(raw.msgID) // since this is a reply, this was an **outgoing** message id
 			if err != nil {
-				// How to handle? With new simple single-reply, there is little reason for this to happen unless something truly borked.
 				t.ErrorChan <- err
 				continue
 			}
-			message := t.makeMessage(raw, nil) // don't pass ref msg since it's a reply
+			message := t.makeMessage(raw, nil)
 			message.service = int(msgData.service)
-
 			msgData.replyChan <- message
-
 		} else if raw.service == closeService { // handles OK and Error messages
 			msgData, err := t.msgReg.getMessageData(raw.msgID)
 			if err != nil {
@@ -286,21 +283,30 @@ func (t *Twine) receive() {
 					t.ErrorChan <- errors.New("Message is closed")
 					continue
 				}
+				// Close the message because we have received the reply
+				_, err = t.msgReg.closeMessage(raw.msgID)
+				if err != nil {
+					t.ErrorChan <- err
+					continue
+				}
 			} else {
 				if !msgData.closed {
 					t.ErrorChan <- errors.New("Received reply acknowledgement on open message")
 					continue
 				}
 			}
+
+			message := t.makeMessage(raw, nil) // we pass a message, but do not connect any ref msg data because the message is at end of life
+			message.service = int(msgData.service)
+			msgData.replyChan <- message
+
+			// This should be close AND unregister?
 			err = t.msgReg.unregisterMessage(raw.msgID)
 			if err != nil {
 				// This should not happen in the normal course of things.
 				t.ErrorChan <- err
 				continue
 			}
-			message := t.makeMessage(raw, nil) // we pass a message, but do not connect any ref msg data because the message is at end of life
-			message.service = int(msgData.service)
-			msgData.replyChan <- message
 
 		} else {
 			// Brand new message, check we're not graceful, then register message id
@@ -402,10 +408,8 @@ func (t *Twine) Reply(msgID int, cmd int, payload []byte) error {
 	/*reply*/
 	_, ok := <-msgData.replyChan
 	if !ok {
-		return errors.New("reply channel closed before reply")
+		return errors.New("reply channel closed before receiving OK or Error")
 	}
-
-	// TODO: should this not unregister the message?
 
 	// TODO: check reply for errors
 
@@ -437,6 +441,10 @@ func (t *Twine) ReplyClose(msgID int, ok bool, errStr string) error {
 		if msgData.closed {
 			return errors.New("msg ID is closed")
 		}
+		_, err = t.msgReg.closeMessage(msgID8)
+		if err != nil {
+			return err
+		}
 	}
 
 	cmd := protocolOK
@@ -451,6 +459,7 @@ func (t *Twine) ReplyClose(msgID int, ok bool, errStr string) error {
 		t.ErrorChan <- err
 	}
 
+	// Unregister now that OK/Error has been sent
 	err = t.msgReg.unregisterMessage(msgID8)
 	if err != nil {
 		t.ErrorChan <- err

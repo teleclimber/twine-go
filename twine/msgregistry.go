@@ -8,11 +8,10 @@ import (
 
 // msg is the data that is stashed in messages hash
 type msg struct {
-	service          serviceID
-	closed           bool
-	replyChanCreated bool
-	replyChan        chan ReceivedReplyI
-	unregWait        *sync.WaitGroup
+	service   serviceID
+	closed    bool
+	replyChan chan ReceivedReplyI
+	unregWait *sync.WaitGroup
 
 	refRequestMux   sync.Mutex
 	refChanOpen     bool
@@ -104,6 +103,10 @@ func (r *messageRegistry) registerMessage(raw *messageMeta) (*msg, error) { // r
 
 	return newMsg, nil
 }
+
+// closeMessage sets closed to true
+// A message should be closed when a reply has been received/sent
+// whether it is a payload reply or OK/Error
 func (r *messageRegistry) closeMessage(msgID uint8) (*msg, error) {
 	r.messagesMux.Lock()
 	defer r.messagesMux.Unlock()
@@ -117,6 +120,7 @@ func (r *messageRegistry) closeMessage(msgID uint8) (*msg, error) {
 	}
 	msgData.closed = true
 
+	// Close ref message chans becase a closed message can no longer receive ref messages
 	msgData.refRequestMux.Lock()
 	if msgData.refChanOpen {
 		close(msgData.refRequestsChan)
@@ -126,6 +130,9 @@ func (r *messageRegistry) closeMessage(msgID uint8) (*msg, error) {
 
 	return msgData, nil
 }
+
+// unregisterMessage deletes the message from the registry
+// This should happen after an OK/Error reply is sent or received.
 func (r *messageRegistry) unregisterMessage(msgID uint8) error {
 	r.messagesMux.Lock()
 	defer r.messagesMux.Unlock()
@@ -135,14 +142,11 @@ func (r *messageRegistry) unregisterMessage(msgID uint8) error {
 		return fmt.Errorf("message ID is not registered: %v", msgID)
 	}
 
-	msgData.closed = true
-
-	msgData.refRequestMux.Lock()
-	if msgData.refChanOpen {
-		close(msgData.refRequestsChan)
-		msgData.refChanOpen = false
+	if !msgData.closed {
+		return errors.New("message should already be closed")
 	}
-	msgData.refRequestMux.Unlock()
+
+	close(msgData.replyChan)
 
 	delete(r.messages, msgID)
 
